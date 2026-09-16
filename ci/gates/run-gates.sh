@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
 # 项目级确定性门禁：任何模块 CI 都跑这一套（零 LLM，纯脚本）。
 # 只扫描 Git 已跟踪文件，避免本地 node_modules、缓存与构建物造成假红。
+#
+# attribution_base 解析优先级（与 ci/gates/check-report-schema.sh 的 report_base
+# 同一套约定，PROC-048/050：feature→dev 走 PR 后，push 事件在 feature 分支上
+# GITHUB_BASE_REF 为空，此时必须落到集成分支 dev 而非 main，否则 dev 上的提交
+# 被误判为 feature-only base）：
+#   1. 显式环境变量 AIMERGENT_ATTRIBUTION_BASE
+#   2. 可信 pull_request 事件（trusted_pr_event）验证过的 event base SHA
+#   3. origin/$GITHUB_BASE_REF
+#   4. origin/dev（若存在）
+#   5. origin/main
+#   6. main（无 origin 的本地/离线场景兜底）
 set -uo pipefail
 
 fail=0
@@ -57,6 +68,9 @@ if [ -z "$attribution_base" ] && [ "$trusted_pr_event" -eq 1 ]; then
 elif [ -z "$attribution_base" ] && [ -n "${GITHUB_BASE_REF:-}" ] &&
    git rev-parse --verify --quiet "origin/$GITHUB_BASE_REF^{commit}" >/dev/null; then
   attribution_base="origin/$GITHUB_BASE_REF"
+elif [ -z "$attribution_base" ] &&
+     git rev-parse --verify --quiet 'origin/dev^{commit}' >/dev/null; then
+  attribution_base=origin/dev
 elif [ -z "$attribution_base" ] &&
      git rev-parse --verify --quiet 'origin/main^{commit}' >/dev/null; then
   attribution_base=origin/main
