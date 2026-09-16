@@ -1,5 +1,15 @@
 #!/usr/bin/env bash
 # 只检查当前任务相对 PR/main merge-base 新增或修改的 canonical reports。
+#
+# report_base 解析优先级（与 ci/gates/run-gates.sh 的 attribution_base 同一套约定，
+# PROC-048/050：feature→dev 走 PR 后，push 事件在 feature 分支上 GITHUB_BASE_REF
+# 为空，此时必须落到集成分支 dev 而非 main，否则 dev 上的提交被误判为
+# feature-only base）：
+#   1. 显式环境变量 AIMERGENT_REPORT_BASE
+#   2. origin/$GITHUB_BASE_REF（pull_request 事件显式给出 PR 目标分支时）
+#   3. origin/dev（若存在）
+#   4. origin/main
+#   5. main（无 origin 的本地/离线场景兜底）
 set -uo pipefail
 
 fail=0
@@ -15,6 +25,9 @@ fi
 if [ -z "$report_base" ] && [ -n "${GITHUB_BASE_REF:-}" ] &&
    git rev-parse --verify --quiet "origin/$GITHUB_BASE_REF^{commit}" >/dev/null; then
   report_base="origin/$GITHUB_BASE_REF"
+elif [ -z "$report_base" ] &&
+     git rev-parse --verify --quiet 'origin/dev^{commit}' >/dev/null; then
+  report_base=origin/dev
 elif [ -z "$report_base" ] &&
      git rev-parse --verify --quiet 'origin/main^{commit}' >/dev/null; then
   report_base=origin/main
