@@ -1,0 +1,3 @@
+{"ts":"2026-09-18T08:54:23Z","task_id":"lesson-sync-readiness","event":"task_start","by":"backend","tier":"normal","branch":"feat/lesson-sync-readiness","base":"076d5e13d8110d2339d6a9b64db863b1f9f97bb6"}
+{"ts":"2026-09-18T08:54:24Z","task_id":"lesson-sync-readiness","event":"self_check","by":"backend","purity":"66/66","tests":"201/201","gates":"green","attempts":1,"failed_gates":0}
+{"ts":"2026-09-18T08:54:24Z","task_id":"lesson-sync-readiness","event":"self_checked","by":"backend","checked":9,"full":6,"partial":2,"missing":1,"gaps_kernel":2,"gaps_thin":5,"gaps_contract":1,"proposed":"v1.1 minor","code_changed":0}
