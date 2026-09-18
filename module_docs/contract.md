@@ -1,4 +1,4 @@
-# realtime_core · 对外接口契约（v1.0.0 · 正式）
+# realtime_core · 对外接口契约（v1.1.0 · 正式）
 
 > 本文件是 realtime_core 对外行为的**唯一事实**。自 P5 起为**正式契约**：下列公共 API 面、端口契约与不变量承诺表构成 semver v1.0.0 的冻结基线——破坏任何一项 = major。realtime_core 是**领域无关的实时/状态机内核库**（纯 ESM、零 runtime 依赖、无服务进程），由消费方 `import` 使用。
 >
@@ -8,14 +8,15 @@
 
 ```yaml
 provides:
-  - id: realtime-core-kernel@v1.0.0
+  - id: realtime-core-kernel@v1.1.0
     summary: 领域无关的实时/状态机内核——long-poll 生命周期 reducer + 命令分发 + 频道广播 + keyed 锁 + 会话内核（事件日志/游标投递/decide-evolve 聚合/事件版本化/崩溃重放）+ 声明式状态机工具；零 runtime 依赖。
 consumes: []   # 零依赖是卖点：内核不依赖任何平台契约或第三方包
 ```
 
 ## 版本与 semver 政策
 
-- **当前：v1.0.0（正式，冻结启用）**。冻结面 = 本文件"公共 API 面"全部导出符号的签名与语义 + "端口契约"五端口形状与义务 + "不变量承诺表"全部条目。
+- **当前：v1.1.0（正式，冻结启用）**。**v1.1.0 相对 v1.0.x = minor（纯新增）**：新增 `session/logstore-conformance.js` 的 2 个导出符号（35 → 37 符号，16 → 17 文件）；既有 35 个导出符号的签名与语义、5 个端口的形状与义务、15 条不变量承诺逐字未动，既有 201 个测试零修改全绿（兼容门）。（`v1.0.1` 仅为仓根 `package.json` 打包垫片——加 `exports` map 使本库可作 git 依赖安装，零 API 变化。）
+- **v1.0.0 冻结基线**。冻结面 = 本文件"公共 API 面"全部导出符号的签名与语义 + "端口契约"五端口形状与义务 + "不变量承诺表"全部条目。
 - **major**（破坏性）：改/删任何导出符号的签名或既有语义；收窄端口义务；削弱任何不变量承诺；改/删信封既有字段。
 - **minor**（新增能力）：新增导出符号；给既有函数加**可选**参数（缺省行为不变）；**枚举扩展**（`PollPhase`/`PollEventType`/`PollActionType` 等新增成员算 minor——消费方对枚举做穷尽 switch 时必须留 default 分支，这是消费方义务）；信封**新增**字段。
 - **patch**：修 bug（向不变量承诺靠拢的行为修正）、文档、内部重构。
@@ -23,7 +24,7 @@ consumes: []   # 零依赖是卖点：内核不依赖任何平台契约或第三
 - **事件版本化与升级链规则（单列）**：`v` 是**每类事件的 payload schema 版本**，由消费方聚合的 `eventVersions` 声明（库缺省 1）。升级链逐级 `v→v+1`（可级联）；**库拥有版本号**（upcaster 只变换形状，库强制盖 `v=from+1`）；缺升级函数遇旧版本 = 响亮 throw；`v >` 当前版本（回滚读新日志）= 响亮 throw。这些 throw 语义是契约承诺（禁静默放行），弱化它们 = major。
 - **消费方引用方式**：git tag 固定版本（`v1.0.0` 起启用，见 rules.md 跨仓依赖机制）。
 
-## 公共 API 面（5 scope · 16 文件 · 35 导出符号）
+## 公共 API 面（5 scope · 17 文件 · 37 导出符号）
 
 以下每个符号的签名与语义均为冻结承诺。约定：**"响亮 throw" = 编程错误**（TypeError/Error/专用错误类），**结构化返回 = 业务结果**（如 `reject`、`{ok:false}`）——两者不混用是全库统一语义。
 
@@ -95,7 +96,7 @@ wakeup/interval 两形态状态图与逐相转移语义见源文件头注释（�
 | `genEventId(ctx)` | → `'evt-<clock>-<rand36>'`。`ctx={clock:()=>ms, rng:()=>[0,1)}` 注入，零全局读取。**是全库缺省事件 id 格式的唯一事实源**（P5 起 `sealEnvelopes` 复用它） |
 | `genTurnId(ctx)` | → `'q-<clock>-<rand36>'`。两段式操作稳定 id（copycat 预备用途）。〔遗产兼容面〕 |
 
-### session/ —— 会话内核：日志+游标投递（P3a）与 decide/evolve 聚合（P3b）（8 文件 · 11 符号）
+### session/ —— 会话内核：日志+游标投递（P3a）与 decide/evolve 聚合（P3b）（9 文件 · 13 符号）
 
 #### 事件信封（框架字段，库只认这些）
 
@@ -152,6 +153,15 @@ wakeup/interval 两形态状态图与逐相转移语义见源文件头注释（�
 |---|---|
 | `createAggregateRuntime({aggregate, logStore, locks?, wakeup?, snapshotStore?, snapshotEvery?})` | → `{execute, load}`。**`execute(streamId, command, ctx)`** → `Promise<{events, state} \| {rejected:{code, detail}}>`：注入 `locks{withLock}` 时全程在 `withLock('stream:<id>')` 内（信箱串行第一道防线；未注入则裸跑）；流程 = 重放 → decide → **经 `delivery.publish` 严格 CAS append**（append 路径全库唯一，聚合层与投递层写日志语义逐字一致）→ 读回落盘信封用与 load 相同折叠推进状态 → 跨 `snapshotEvery`（缺省 50）边界滚动落快照。reject → 无事件、不动日志、不改状态；decide 产零事件 → `{events:[], state}` 无痕 no-op；CAS 冲突（锁失效/并发漏网）→ `ConflictError` 响亮上抛，**不静默重试**。`wakeup` 可选（缺省 no-op，纯聚合场景无订阅者）。**`load(streamId)`** → state（快照 + 尾部重放，逐条 upcast→evolve）。依赖形状不合法 → TypeError |
 
+#### `src/session/logstore-conformance.js`（logStore 端口一致性套件 · v1.1.0 新增）
+
+| 符号 | 签名与承诺 |
+|---|---|
+| `runLogStoreConformance({createStore, seeds?, steps?})` | → `Promise<{checks: string[], passed: number}>`。对一个 logStore 适配器跑完整的端口义务套件（10 项检查，覆盖 append CAS / 并发 CAS（同一 `expectedLastSeq` 多路并发恰好一个胜者）/ 整批原子 / seq 连续从 1 / read 窗口 / 游标只进与幂等 / 越界 RangeError / 多流隔离 / 固定种子模糊比对）。**`createStore()` 每次调用必须返回全新空存储**（可返回 Promise），套件每项检查各取一个；对每个端口调用都 `await`，**异步适配器合法**。任一违约 → throw，`err.name = 'LogStoreConformanceError'`、`err.check` = 违约检查名、message 前缀 `[检查名]`；**适配器在预期成功的调用中泄漏的原始异常同样被重包成该形状，原错误挂在 `err.cause`**（不吞、可追）；全过即返回。`seeds`（缺省 `[1,2,3]`）与 `steps`（缺省 `60`）供慢适配器调小；`createStore` 非函数 / `seeds` 非非空整数数组 / `steps` 非正整数 → TypeError。零 import（不依赖测试框架，任意 runner 可用） |
+| `LOG_STORE_CONFORMANCE_CHECKS` | 冻结的检查名数组（稳定顺序，当前 10 项）。**枚举扩展**：后续版本新增检查项 = minor，消费方不得假设长度或下标固定 |
+
+**定位**：本套件是端口契约"实现方义务"的**可执行规格**——适配器作者跑通它即算达标，不必自行重写 CAS/游标断言。它**不替代**消费方对自己领域逻辑的测试，也不检验性能与事务隔离级别。
+
 ### machine/ —— 声明式状态机工具（1 文件 · 3 符号）
 
 #### `src/machine/define-machine.js`
@@ -178,6 +188,8 @@ advanceCursor(streamId, group, seq)         → void
 ```
 
 实现方义务：**append 是 CAS**——`expectedLastSeq ≠ 当前 lastSeq` 必须抛 `ConflictError`（携 streamId/expected/actual），且**整批原子**（不存在半批可见）；seq 由日志层分配、流内连续从 1 起；信封构造用 `sealEnvelopes`（校验失败时日志分毫未动）。**read** 返回 `seq > fromSeqExclusive` 的信封、最多 limit 条。**advanceCursor 只进不退**：回退 → RangeError；同 seq 幂等 no-op；越过日志末尾 → RangeError（不给不存在的事件立书签）。异步实现合法（runtime 已 `await` 兼容）。
+
+**达标方式（v1.1.0 起）**：实现方用 `runLogStoreConformance({createStore})` 对自己的适配器跑通全部检查即视为满足上述义务；`createMemoryLogStore` 是该套件的第一个通过者。**不跑套件的适配器不得声称满足本端口。**
 
 ### ② snapshotStore（聚合快照；`createAggregateRuntime` 可选注入）
 
@@ -217,6 +229,15 @@ send(payload: string) → void        isOpen() → boolean
 ### 注入约定 ctx（横切）
 
 `ctx.clock: () => number`（毫秒时间戳）与 `ctx.rng: () => number`（[0,1) 浮点）是全库唯一的非确定性来源形状——生产代码零 `Date.now`/`Math.random`（纯度门机械核）。聚合 `ctx` 另可携 `actor`（库不解释透传）。
+
+## 消费方义务（违反即行为未定义，库不兜底）
+
+1. **枚举留 default 分支**：对 `PollPhase`/`PollEventType`/`PollActionType` 等**枚举**做穷尽 switch 必须留 default——枚举扩展是 minor。`LOG_STORE_CONFORMANCE_CHECKS` 是**数组**（不是枚举）：遍历它、不得假设长度或下标固定。
+2. **鉴权不得放进 `defineMachine` 的 guard**：guard 契约是 `(ctx, event) => boolean` **纯同步谓词**，返回 Promise 会被当作恒真值，鉴权形同虚设并破坏 I14（`can === true ⟺ transition 成功`）。正确形状：**身份校验在进入 `longPoll`/`delivery.subscribe` 之前一次性完成**（authorizeOnce），校验结果经聚合 `ctx.actor` 透传（库不解释、只透传）；guard 只读**已在 ctx 里的同步事实**。库内零鉴权表面——公网端点的平台鉴权与限流是消费方义务（本项目铁律 18）。
+3. **`streamId` / `scopeKey` / `group` 的命名归消费方**：库把它们当**不透明字符串**，不解析、不校验、不赋予层级语义（`org:…/class:…` 之类的分层约定是消费方的事）。多租户隔离靠命名与消费方存储实现，**库不提供租户边界**。
+4. **同一 `group` 共享一枚游标——重复投递，不是竞争消费**：`pull` 不动游标，所以同 group 的多个订阅者（同一用户的多个标签页、多个 worker 实例）**各自都会收到同一批未确认事件**（at-least-once 的自然结果，消费逻辑必须幂等）。真正的危险在 **`ack`**：任一订阅者的前缀确认会把**全组共享**的游标前移，其他订阅者从此再也见不到 `≤seq` 的事件——**哪怕它们还没处理**。三条出路按页面性质选：①同 group 但只让一个"权威"实例 `ack`，其余只读（最省）；②每个订阅者一个独立 group，各自游标互不干扰（游标记录随订阅者增长，回收归消费方——端口不提供删除游标的方法）；③用 `createPollRegistry()` + `longPoll` 的 `registry`/`key` 顶替，只保留最后一个连接（旧连接收 `superseded`）。**必须显式选一个**——默认行为是"都收到、但谁 ack 谁就替全组前移游标"。
+5. **不得修改已发布的 `payload`**：信封冻结但 `payload` 是引用不是拷贝。
+6. **`pull` 不动游标**：at-least-once，未 `ack` 必重投，消费侧逻辑需幂等。
 
 ## 不变量承诺表（契约级承诺 · 与测试互指）
 
@@ -272,3 +293,4 @@ send(payload: string) → void        isOpen() → boolean
 | 2026-07-19 | 无（dev 孵化，无 CR） | P3b 会话内核（下）：`defineAggregate`/`reject`/`isReject`、`upcastEvent`、`createMemorySnapshotStore`、`createAggregateRuntime`（append 路径唯一：复用 delivery.publish）。既有 110 测试零修改全绿，四不变量 property 钉死 |
 | 2026-07-19 | 无（dev 孵化，无 CR） | P4 defineMachine 声明式转移表：平表 + 纯谓词守卫 + 定义期全面校验。既有 153 测试零修改全绿，两不变量 property 钉死，纯度门 56→61 |
 | 2026-07-19 | 无（dev 孵化，无 CR） | **P5 契约正式化（本版）**：draft 全部转正 → v1.0.0 冻结基线（35 导出符号 · 5 端口 · 15 条不变量承诺表与测试互指）；semver 政策 + 信封"只加不改" + 升级链规则单列；遗产兼容面（queue/ + session·skill lock keys）标注冻结、中性化移交 v2/迁平台层；SSE 参考适配器实测三形态共用内核（`reference/sse-adapter.ref.mjs`）；收债：信封 id 去重到 `queue/ids.js`（纯度门白名单闭环 61→66）、`ordering.js` 补 8 专属测试；`longPoll` 微任务窗口（timeout 兜底）如实入契。既有 187 测试零修改全绿（201/201 总）。tag `v1.0.0` 待 CFO 于 main 打；迁平台层待 CFO 治理流程 |
+| 2026-09-18 | CFO 裁决（就绪评估 PR #6 · D1） | **v1.1.0（minor · 纯新增）**：导出 logStore 端口一致性套件 `runLogStoreConformance` / `LOG_STORE_CONFORMANCE_CHECKS`（10 项检查，含并发 CAS 与固定种子模糊比对；违约与泄漏异常统一为 `LogStoreConformanceError`+`err.cause`），端口"实现方义务"从散文升级为可执行规格，消费方适配器跑通即达标；新增"消费方义务"节（枚举 default / 鉴权不进 guard / 命名归消费方 / 多标签页选型 / payload 引用 / at-least-once）。既有 35 符号 · 5 端口 · 15 不变量逐字未动，既有 201 测试零修改全绿（217/217），纯度门 66→71。同审 Codex sol + opencode 各 rejected 一轮（并发 CAS 漏检、本表第 4 条原表述与实现相反、错误未包装）→ 返修 de755c5。opus（backend@realtime_core）实现，项目 arbiter 执笔 |

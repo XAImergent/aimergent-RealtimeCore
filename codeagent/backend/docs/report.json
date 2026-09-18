@@ -2,84 +2,151 @@
   "schema_version": 2,
   "module": "realtime_core",
   "role": "backend",
-  "task": "realtime_core P5（库内部分）：contract.md 正式化为 v1.0.0 冻结基线（全导出符号+五端口+不变量-测试互指表+semver 政策）+ SSE 参考适配器实测 + 收债（信封 id 去重/ordering 补测）+ README + version 1.0.0；不合 main、不打 tag、迁平台层治理动作不在本单",
-  "tier": "hard",
-  "status": "approved",
-  "summary": "[backend 自检通过的 candidate，待正式审核；分支 feat/p5-contract-v1 未合 main，无 remote] ①contract.md 定稿 v1.0.0：5 scope·16 文件·35 导出符号逐一列签名/错误/语义（机械比对 src 全部 export，35/35 覆盖），5 端口（logStore/snapshotStore/timers/wakeup/conn）+ctx 注入约定含实现方义务，15 条不变量承诺表 I1-I15 逐条带测试文件锚点（契约与测试互指），semver 政策（枚举扩展=minor、信封字段只加不改单列、升级链响亮 throw=契约承诺），明确非目标 6 项，遗产兼容面（queue/ 全部+session·skill lock keys）标注冻结。②SSE 结论=实测成立无内核缺口：reference/sse-adapter.ref.mjs+6 测试，conn 抽象+delivery.subscribe 顺序复合多个 poll 生命周期实现'RESPOND 后连接仍活着继续推'，WS/long-poll/SSE 三形态共用内核 src/ 一行未动；顺带发现 P1 起即有的 initial-pull→SUBSCRIBE 微任务窗口（timeout 兜底），保守记录不修、如实入契。③收债：信封 id 去重到 queue/ids.js（clock 传已取 at 保行为逐字不变，纯度门开受控白名单+白名单闭环 61→66）、ordering.js 补 8 专属测试（并钉死 maxEventSeq 计入无 type 事件的既有不对称）；符号中性化与'187 零修改'兼容门硬冲突→保守移交 v2/迁平台层（rules.md 记处置）；持久化适配器移交首个消费方；defineMachine YAGNI 项评估完毕明确留 v1.0 之外；无悬空项。④README 一页+package.json 1.0.0；tag 由 CFO 合并后在 main 打。既有 187 测试零修改全绿（201/201 总），纯度门 66/66。",
+  "task": "v1.1.0 D1：导出 logStore 端口一致性套件（第 1 轮返修：同审两人 rejected 的并发 CAS 漏检 + 错误归属 + 版本漂移）",
+  "tier": "normal",
+  "status": "self_checked",
+  "summary": "【返修后】新增 code/backend/src/session/logstore-conformance.js（394 行、零 import），导出 runLogStoreConformance + LOG_STORE_CONFORMANCE_CHECKS（返修后 10 项检查）。R1 共同 P1 已修：新增第 10 项 append/cas-concurrent——同一 expectedLastSeq 三路并发 append 必须恰好一个胜者、其余全 ConflictError、日志恰好多出胜者那一批；确定性做法＝三路 append 先全部发出（各自同步执行到第一个 await）再 Promise.allSettled 收割，不用定时器、不赌墙钟：同步适配器后来者调用时即撞 CAS，正确异步适配器提交点只有一个能赢，而 TOCTOU 适配器（读快照→让出→按陈旧快照提交）三路全部“成功”被当场抓住。R2（Codex P1-3 / opencode P2-3）已修：runLogStoreConformance 对 createStore() 与每个 spec.run 各包一层，非 LogStoreConformanceError 一律重包为带 check 的违约、原错误挂 err.cause。R3 行数自报不实已按 wc -l 回填（332→实测 394）。R4 版本漂移已修（两个 package.json description + README v1.0.0→v1.1.0，README 另补适配器达标方式一行）；contract.md 的 frontmatter id 与其余五处属 CFO scope，逐条写进 worklog 第 141 行起的「契约更正」节。其中最重要一条（更正①）：契约「消费方义务」第 4 条与实现相反——实测 delivery.pull 不动游标，同 group 两次 pull 都拿到 [1,2]（重复投递，不是竞争消费）；真正的危险是任一方 ack 会推进全组共享游标，另一方从此看不到 ≤seq 的事件。该错误表述源头是我就绪评估的 B6，如实认领并给出可逐字替换的正确文本。测试 201 既有零修改 + 本单 16 = 217/217 全绿，纯度门 71/71，run-gates 🟢。",
   "git": {
     "protocol": "embedded-self-v2",
-    "branch": "feat/p5-contract-v1",
-    "base": "f497ac23928ea684179cea299d9980bb43e072c2",
+    "branch": "feat/v1.1-logstore-conformance",
+    "base": "076d5e13d8110d2339d6a9b64db863b1f9f97bb6",
     "head": "SELF",
     "diff_mode": "contains",
     "changed_files": [
-      "code/backend/src/session/envelope.js",
-      "code/backend/src/queue/ordering.test.mjs",
-      "code/backend/reference/sse-adapter.ref.mjs",
-      "code/backend/reference/sse-adapter.ref.test.mjs",
+      "code/backend/src/session/logstore-conformance.js",
+      "code/backend/src/session/logstore-conformance.test.mjs",
       "code/backend/package.json",
-      "review/reviewcode/check-kernel-purity.mjs",
-      "module_docs/contract.md",
-      "module_docs/rules.md",
-      "module_docs/handoff.md",
+      "package.json",
       "README.md",
-      "codeagent/backend/docs/worklog/2026-07-19-backend-p5-contract-v1.md",
+      "codeagent/backend/docs/worklog/2026-09-18-backend-v1.1-logstore-conformance.md",
+      "codeagent/backend/docs/diary/2026-09-18-v1.1-logstore-conformance.jsonl",
       "codeagent/backend/docs/report.json"
     ]
   },
   "contract": {
-    "touched": true,
-    "which": ["realtime-core-kernel@v1.0.0（模块自身契约 draft→正式化，dev 孵化仓、尚无外部消费方；未触及 auth/llm/market_data 平台契约）"],
+    "touched": false,
+    "which": [
+      "realtime-core-kernel：v1.1.0 新增 2 个导出符号 + 消费方义务节——contract.md 本单未动；返修后的六处更正（含一条与实现相反的行为描述）在 worklog 第 141 行起的「契约更正」节，由 CFO 执笔"
+    ],
     "consumes": []
   },
-  "cross_module_impact": [],
-  "escalation": null,
+  "cross_module_impact": [
+    "copycat：Step-5 R3 波次的 SQLite logStore 适配器可直接接本套件验收（当前 pin v1.0.1，bump 到 v1.1.0 后可用）",
+    "上课服务：其 logStore 适配器同样接本套件；CFO 交接纸条『端口义务有可执行 property 套件』的承诺在 v1.1.0 起成立"
+  ],
+  "escalation": {
+    "reason": "需 CFO 动作（契约更正执笔）+ 需 reviewagent 更新探针断言方向",
+    "detail": "①按 worklog 第 141 行起「契约更正」六条更新 module_docs/contract.md：更正①消费方义务第 4 条（当前表述与实现相反，实测证据在 worklog，必须整条替换）；②:99 session/ 段头 8 文件·11 符号 → 9 文件·13 符号（各段求和 17/37 与 :27 对齐）；③:160 条目 9 项→10 项检查 + 补错误归一化承诺（含 err.cause）；④:161 当前 9 项→10 项；⑤:235 义务第 1 条把数组 LOG_STORE_CONFORMANCE_CHECKS 从枚举 switch 那句摘出单列；⑥:11 frontmatter id @v1.0.0→@v1.1.0 且 :296 变更记录同步 10 项/217 测试。②两位 reviewer 的探针有若干断言钉的是被修复的缺陷本身（codex :120 与 :195、opencode D1 判定条件），修好后必然反转，需 reviewagent 按修复后期望更新——探针在 review/ 下属他们 scope，我只读未改。③合并后打 v1.1.0 tag。④D2 presence 仍按裁决不做。"
+  },
   "tests": {
-    "unit": { "passed": 201, "failed": 0, "cmd": "cd code/backend && node --test --test-concurrency=1 (串行)" },
-    "e2e": { "passed": 0, "failed": 0, "flow": "无 e2e：库模块，无服务进程/对外端点。SSE 形态端到端由 reference/sse-adapter.ref.test.mjs 6 用例承担（真 longPoll+真 delivery+真 memory-log-store 组装）" }
+    "unit": {
+      "passed": 217,
+      "failed": 0,
+      "cmd": "cd code/backend && node --test --test-concurrency=1（既有 201 零修改 + 本单 16）"
+    },
+    "e2e": {
+      "passed": 0,
+      "failed": 0,
+      "flow": "无 e2e：库模块，无服务进程/对外端点。正向验收由『内存参考实现 + 全异步包装实现整套 10 项通过』承担；反向由 8 个坏适配器各被指名抓住承担"
+    }
   },
   "compat_gate": {
     "existing_tests_unmodified": true,
-    "existing_pass": 187,
-    "new_pass": 14,
-    "evidence": "git diff --name-only --no-renames f497ac2..HEAD 中无任何既有 *.test.mjs（新增 ordering.test.mjs/sse-adapter.ref.test.mjs 两个测试文件、生产代码仅 envelope.js 一处收债改动）；187 既有零修改 + 14 新增 = 201 全绿。收债改动（envelope id 去重）以既有测试全绿为兼容门通过"
+    "existing_pass": 201,
+    "new_pass": 16,
+    "evidence": "git diff --name-only --no-renames 076d5e1..HEAD 的 *.test.mjs 只有本单新增的 logstore-conformance.test.mjs（A/M 均属本分支自产）；既有 log-cursors.property.test.mjs 等逐字未动"
   },
   "self_check": {
     "reviewcode_passed": true,
-    "attempts": 1,
-    "failed_gates": [],
+    "attempts": 3,
+    "failed_gates": [
+      "第 1 轮自检：fuzz/model-equivalence 在 seed 1 step 14 生成 seq=0 的回退攻击，期望 RangeError 实得 TypeError（套件自身语义错），已把回退目标限定在 [1, cur-1]",
+      "第 1 轮独立审核（codex + opencode 双 rejected）：①套件无并发交错 CAS 检查，串行全对的 TOCTOU 适配器 9/9 通过后并发丢写；②适配器在预期成功的调用中抛的原始错误逃逸（err.check undefined）；③两个 package.json description 与 README 仍写 contract v1.0.0；④自报 332 行实为 334 行。四项本轮全修"
+    ],
     "passed": true,
-    "detail": "check-kernel-purity.mjs 66 PASS / 0 FAIL（transport 16 + session 40（8 文件×5，P5 起唯一受控白名单 queue/ids.js）+ machine 5 + 白名单闭环 5（queue/ids.js 本身过同 5 项严格检查，白名单不成纯度盲区））"
+    "detail": "跑前 unset 五个代理变量。node review/reviewcode/check-kernel-purity.mjs = 71 PASS / 0 FAIL；cd code/backend && node --test --test-concurrency=1 = 217 pass / 0 fail；bash ci/gates/run-gates.sh = 🟢 全部门禁通过。另跑两位 reviewer 的探针（只读不改）：opencode 牙齿探针 A1–A10/B2 全 ok 且 D1 的 NOTE 行显示 racyCAS 现被 [append/cas-concurrent] 指名抓住（其 exit≠0 来自探针只判坏适配器自身的日志损坏、从不读套件是否抓住——断言方向需 reviewagent 更新）；codex 探针 5 个 named-failure 全 PASS，随后停在 :120 的 assert.equal(rawError.name,'RangeError')——那条断言钉的就是已修复的缺陷本身，必然反转"
   },
-  "contract_coverage": {
-    "exported_symbols": "35/35（脚本机械比对 src/ 全部 `export const|function|class` vs 契约文本，零遗漏）",
-    "ports": 5,
-    "invariants": 15,
-    "cross_reference": "不变量承诺表 I1-I15 每条带测试文件锚点；兼容门（187 快照）入契为持续性承诺；全文一致性自查通读一遍（修正一处 session scope 计数笔误）"
-  },
-  "sse_conclusion": {
-    "verdict": "实测成立，无内核缺口",
-    "detail": "SSE'RESPOND 后连接仍活着继续推'= 顺序复合多个 poll 生命周期（每帧一个完整生命周期），'连接存活'活在 conn port 而非状态机词汇（即端口设计意图）；长轮询'回完即终'=单生命周期。6 测试实测：积压立即推/同 conn 多帧/跨周期零丢失/超时心跳/断连静默/重连续读（id 行=Last-Event-ID 语义）/conn 与 channels(WS) 同形状互换。src/ 一行未动",
-    "side_finding": "P1 起即有的微任务窗口：wakeup 形态 publish 落在 initial attempt（pull 空）与 SUBSCRIBE 之间时唤醒丢失，延迟至 TIMEOUT/下一生命周期可见（上限 timeoutMs）。非 SSE 特有；保守决策记录不修（修会改既有动作序列违兼容门），已如实入契（contract longPoll 条目语义冻结）+ handoff 避坑"
-  },
-  "debt_ledger": [
-    { "debt": "信封 id 与 queue/ids.js 重复实现（P3a ⑤号）", "disposition": "✅ 已清偿：envelope 复用 genEventId（clock 传已取 at，行为逐字不变）；纯度门受控白名单+闭环检查 61→66" },
-    { "debt": "ordering.js 无专属测试（P1 遗留）", "disposition": "✅ 已清偿：queue/ordering.test.mjs 8 用例（含钉死 maxEventSeq/投影不对称与 null 崩溃行为）" },
-    { "debt": "符号中性化（sessionLockKey/skillLockKey/orderedSessionEvents/genTurnId 等，P1 遗留）", "disposition": "⏭ 移交 v2/迁平台层专项：与本单'187 零修改'兼容门硬冲突（重命名必改测试）；契约标注为遗产兼容面冻结如现状，中性化=major；rules.md 记录处置与理由" },
-    { "debt": "真实持久化 logStore/snapshotStore 适配器（P3b）", "disposition": "⏭ 移交首个消费方落地期：端口契约已在 v1.0 正式化（含实现方义务），内存参考实现即可执行规格" },
-    { "debt": "defineMachine YAGNI 项（P4）", "disposition": "✅ 已评估收账：层级/并行/actor/actions/延迟/字符串简写全部明确留在 v1.0 之外（contract 非目标节冻结边界），需求出现走 minor/v2" },
-    { "debt": "maxEventSeq 无 null 兜底（P1 worklog'若公开需评估'）", "disposition": "✅ 已评估收账：保留崩溃行为并入契冻结（加兜底=改既有行为违兼容门），ordering.test.mjs 钉死" }
+  "tech_debt": [
+    {
+      "id": "RTC-DEBT-CONFORMANCE-SUITE",
+      "debt": "logStore 端口一致性套件不可复用（就绪评估 B1）",
+      "severity": "high",
+      "proposal": "✅ 本单清偿：导出 runLogStoreConformance + LOG_STORE_CONFORMANCE_CHECKS，9 项检查各配一个反证测试证明有牙齿",
+      "owner_hint": "已完成，待审核与 tag"
+    },
+    {
+      "id": "RTC-DEBT-CONFORMANCE-OVERLAP",
+      "debt": "新套件与既有 log-cursors.property.test.mjs 在『seq 连续/游标只进』上有模型断言重复",
+      "severity": "low",
+      "proposal": "有意保留：合并两者必须改既有测试文件，撞兼容门（rules.md §技术与目录 4）。两者 scope 不同（既有考内核+内存实现+delivery，新套件考任意适配器的四方法义务）。若将来兼容门随 v2 放开，可让既有 property 测试转为套件的调用方",
+      "owner_hint": "v2 专项"
+    },
+    {
+      "id": "RTC-DEBT-PRESENCE",
+      "debt": "无 presence/心跳 TTL 判定（就绪评估 B2 / D2）",
+      "severity": "medium",
+      "proposal": "CFO 裁决本轮不批，等第二个当堂课页落地再议。继续挂账",
+      "owner_hint": "待 CFO 再议"
+    },
+    {
+      "id": "RTC-DEBT-CONSUMER-OBLIGATION-DOCS",
+      "debt": "契约缺消费方义务节（guard 纯同步谓词 / 命名归消费方 / 多标签页选型）",
+      "severity": "medium",
+      "proposal": "草案已备（worklog 第 52 行起『契约草案』④），由 CFO 执笔合并进 contract.md",
+      "owner_hint": "CFO"
+    },
+    {
+      "id": "RTC-DEBT-VERSION-DOC-DRIFT",
+      "debt": "contract.md 版本行仍写 v1.0.0",
+      "severity": "low",
+      "proposal": "package.json 两处已随本单改 1.1.0；contract.md 版本行按草案① 由 CFO 改",
+      "owner_hint": "CFO"
+    },
+    {
+      "id": "RTC-DEBT-REAL-LOGSTORE",
+      "debt": "库内仍无真实持久化适配器（维持 P3b/P5 决策）",
+      "severity": "low",
+      "proposal": "维持不进内核（better-sqlite3 是原生依赖，会毁掉零依赖卖点）。本单交付的套件正是该决策成立的前提——消费方自写、套件保证不写错",
+      "owner_hint": "各消费方"
+    }
   ],
-  "deviations": [
-    "符号中性化未按 rules.md 原设想'趁 v1.0 定版做'——与任务单最高优先级纪律 2（既有 187 测试零修改）硬冲突，保守让位并移交（详见 worklog 决策节）；备选'新旧双名并存'因把两套名字冻进 v1.0 而弃",
-    "locks 锁链注册表是模块级单例（copycat 逐字遗产）——契约如实写明并冻结，隔离实例工厂留 v1.x（minor），不在本单改",
-    "SSE 测试初版在'serveSse 后立即 publish'处踩中 initial-pull→SUBSCRIBE 微任务窗口——修测试为先 flush 建立订阅，窗口本身作为既有语义入契（记录不修）",
-    "不打 v1.0.0 tag（任务单显式：tag 由 CFO 合并后在 main squash commit 上打）；迁平台层 CR/0仓/CONTRACTS-INDEX 全部标'待 CFO 治理流程'未动",
-    "lightweight 单 agent 按任务单显式授权一并更新 module_docs（contract/rules/handoff）+ README + 纯度门脚本；下游仍有独立正式审核",
-    "本仓 dev/ 孵化局部仓无 git remote——candidate 停在本地 commit 无 push 环节（与 P1-P4 同状态）"
+  "pitfalls_checked": [
+    {
+      "pitfall": "既有测试一行不许改（rules.md 兼容门）",
+      "ok": true,
+      "evidence": "git diff --name-only origin/main..HEAD 无既有 *.test.mjs；201 既有用例零修改全绿"
+    },
+    {
+      "pitfall": "不改 module_docs/contract.md（契约归 arbiter/CFO）",
+      "ok": true,
+      "evidence": "diff 中无 module_docs/；草案写在 worklog 第 52 行起"
+    },
+    {
+      "pitfall": "自 origin/main 建分支、不叠在 readiness 分支上（铁律15②）",
+      "ok": true,
+      "evidence": "git checkout -b feat/v1.1-logstore-conformance origin/main；merge-base = 076d5e1"
+    },
+    {
+      "pitfall": "新增 session/ 文件必须过纯度门 5 项（零 import 逃逸/零领域词/零 Date.now·Math.random/无 db.transaction/≤500 行）",
+      "ok": true,
+      "evidence": "check-kernel-purity 71 PASS，新文件 332 行、零 import"
+    },
+    {
+      "pitfall": "非确定性走注入：模糊检查用固定种子 mulberry32，不读全局时钟/随机",
+      "ok": true,
+      "evidence": "logstore-conformance.js mulberry32；clock/rng 属 createStore 注入职责"
+    },
+    {
+      "pitfall": "不 push（任务单显式）",
+      "ok": true,
+      "evidence": "本地 commit only，远端无该分支"
+    },
+    {
+      "pitfall": "不打印任何密钥值",
+      "ok": true,
+      "evidence": "本模块无 env/密钥表面；本单零密钥接触"
+    }
   ],
-  "handover_to_cfo": [
-    "合并后在 main squash commit 打 v1.0.0 tag（本分支未打）",
-    "迁 0/ 平台层治理流程：CR + 0/AGENTS.md 顶层结构 + CONTRACTS-INDEX 登记 + 模块模式切 governed（需用户逐字确认）"
-  ]
+  "security_reviewed": false,
+  "security_note": "realtime_core 无对外端点、无 env/密钥表面。本单新增面是测试期工具，不进生产请求路径；契约草案④第 2 条已把『鉴权必须在 longPoll 之前、不得放进同步 guard』写成消费方义务（呼应铁律 18）"
 }
