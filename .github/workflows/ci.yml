@@ -27,6 +27,39 @@ jobs:
           # 仓转入 XAImergent 组织后，gitleaks-action 对组织要求 license，
           # 否则整步失败并让后续 deterministic gates 被 skip（不是通过，是没跑）。
           GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+      # PROC-060：gates job 会跑 review/reviewcode/run_all.sh，其 Node/Python 探针需要模块运行时
+      # 依赖。此前只在 test job 装依赖，导致 Node 仓/git-dep 探针在远端一律红。按存在与否按需安装。
+      - name: setup node for module probes
+        if: ${{ hashFiles('code/backend/package.json', 'code/frontend/package.json', 'package.json') != '' }}
+        uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+      - name: install module node deps
+        if: ${{ hashFiles('code/backend/package.json', 'code/frontend/package.json', 'package.json') != '' }}
+        run: |
+          for dir in code/backend code/frontend .; do
+            [ -f "$dir/package.json" ] || continue
+            if [ -f "$dir/package-lock.json" ]; then
+              (cd "$dir" && npm ci --no-audit --no-fund)
+            else
+              (cd "$dir" && npm install --no-audit --no-fund)
+            fi
+          done
+      - name: setup python for module probes
+        if: ${{ hashFiles('code/**/requirements*.txt', 'requirements*.txt') != '' }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: install module python deps
+        if: ${{ hashFiles('code/**/requirements*.txt', 'requirements*.txt') != '' }}
+        run: |
+          while IFS= read -r req; do
+            echo "pip install -r $req"
+            python -m pip install -r "$req"
+          done < <(find code -maxdepth 3 -name 'requirements*.txt')
+          if [ -f requirements.txt ]; then
+            python -m pip install -r requirements.txt
+          fi
       - name: deterministic gates
         run: bash ci/gates/run-gates.sh
 

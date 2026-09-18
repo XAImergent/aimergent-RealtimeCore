@@ -19,6 +19,14 @@ say() { printf '%s\n' "$*"; }
 bad() { printf '❌ %s\n' "$*"; fail=1; }
 ok()  { printf '✅ %s\n' "$*"; }
 
+# 发布晋升 dev→main：dev 上各任务的 report git.base 指向 dev 上的任务起点，在「必须是 main
+# 祖先」判定下必然红；feature→dev 的 PR 已完成逐任务校验，故晋升事件跳过 canonical report 门。
+release_promotion=0
+if [ "${AIMERGENT_RELEASE_PROMOTION:-}" = 1 ] ||
+   { [ "${GITHUB_HEAD_REF:-}" = dev ] && [ "${GITHUB_BASE_REF:-}" = main ]; }; then
+  release_promotion=1
+fi
+
 tracked=()
 if [ -d code ]; then
   mapfile -d '' tracked < <(git ls-files -z -- code)
@@ -136,7 +144,9 @@ else
 fi
 
 say "── gate: canonical report schema ──"
-if [ ! -x ci/gates/check-report-schema.sh ]; then
+if [ "$release_promotion" -eq 1 ]; then
+  say "release promotion dev→main：逐任务报告校验已在 feature→dev 时完成，跳过"
+elif [ ! -x ci/gates/check-report-schema.sh ]; then
   bad "缺少可执行 report schema gate: ci/gates/check-report-schema.sh"
 elif ci/gates/check-report-schema.sh; then
   ok "当前任务 canonical reports 合规"
@@ -192,7 +202,43 @@ else
 fi
 
 say "── gate: 模块 reviewcode ──"
-if [ -x review/reviewcode/run_all.sh ]; then
+# 模块级 reviewcode 的跳过判定（两条件合在同一处，避免重复分支）：
+#   • release promotion（dev→main）：逐任务审核探针已在 feature→dev 执行，晋升区间（整段
+#     dev 变更）跑 run_all.sh 必然假红，跳过。
+#   • infra rollout：某分支相对目标分支的 diff 非空、且**全部**落在 ci/ 或 .github/ 时，说明
+#     这是 L0 治理层的 CI 模板分发提交（arbiter 归属、只动基础设施，不含模块产物），模块级
+#     reviewcode 检查（arbiter scope 不含 ci/、也不要求 arbiter report 匹配）天然不适用，跳过。
+# 其余门一律照跑。base 取法与 ci/gates/check-report-schema.sh 的 report_base 同一套优先级。
+infra_diff_base=${AIMERGENT_REPORT_BASE:-}
+if [ -z "$infra_diff_base" ] && [ -n "${GITHUB_BASE_REF:-}" ] &&
+   git rev-parse --verify --quiet "origin/$GITHUB_BASE_REF^{commit}" >/dev/null; then
+  infra_diff_base="origin/$GITHUB_BASE_REF"
+elif [ -z "$infra_diff_base" ] &&
+     git rev-parse --verify --quiet 'origin/dev^{commit}' >/dev/null; then
+  infra_diff_base=origin/dev
+elif [ -z "$infra_diff_base" ] &&
+     git rev-parse --verify --quiet 'origin/main^{commit}' >/dev/null; then
+  infra_diff_base=origin/main
+elif [ -z "$infra_diff_base" ] &&
+     git rev-parse --verify --quiet 'main^{commit}' >/dev/null; then
+  infra_diff_base=main
+fi
+infra_rollout=0
+if [ -n "$infra_diff_base" ]; then
+  infra_merge_base=$(git merge-base HEAD "$infra_diff_base" 2>/dev/null || true)
+  if [ -n "$infra_merge_base" ]; then
+    infra_diff=$(git -c core.quotePath=false diff --name-only --no-renames \
+      "$infra_merge_base..HEAD")
+    if [ -n "$infra_diff" ] && ! grep -qvE '^(ci/|\.github/)' <<<"$infra_diff"; then
+      infra_rollout=1
+    fi
+  fi
+fi
+if [ "$release_promotion" -eq 1 ]; then
+  say "release promotion：逐任务审核探针已在 feature→dev 执行，跳过 run_all"
+elif [ "$infra_rollout" -eq 1 ]; then
+  say "infra rollout（仅 ci/ 与 .github/ 变更，L0 治理层所有）：跳过 review/reviewcode/run_all.sh"
+elif [ -x review/reviewcode/run_all.sh ]; then
   ./review/reviewcode/run_all.sh || bad "reviewcode/run_all.sh 未全绿"
 else
   say "（无 run_all.sh，跳过）"

@@ -16,6 +16,18 @@ fail=0
 bad() { printf '❌ report schema: %s\n' "$*" >&2; fail=1; }
 ok() { printf '✅ report schema: %s\n' "$*"; }
 
+# 发布晋升 dev→main：dev 是集成分支，dev 上各任务的 report git.base 指向 dev 上的任务起点，
+# 在「必须是 main 祖先」判定下必然红；feature→dev 的 PR 已完成逐任务校验，故晋升事件跳过。
+release_promotion=0
+if [ "${AIMERGENT_RELEASE_PROMOTION:-}" = 1 ] ||
+   { [ "${GITHUB_HEAD_REF:-}" = dev ] && [ "${GITHUB_BASE_REF:-}" = main ]; }; then
+  release_promotion=1
+fi
+if [ "$release_promotion" -eq 1 ]; then
+  printf '%s\n' "release promotion dev→main：逐任务报告校验已在 feature→dev 时完成，跳过"
+  exit 0
+fi
+
 report_base=${AIMERGENT_REPORT_BASE:-}
 report_head=${AIMERGENT_REPORT_HEAD:-HEAD}
 if ! git rev-parse --verify --quiet "$report_head^{commit}" >/dev/null; then
