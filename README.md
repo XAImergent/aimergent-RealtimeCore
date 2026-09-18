@@ -3,8 +3,9 @@
 领域无关的**实时/状态机内核库**：long-poll 生命周期 reducer、命令分发、频道广播、keyed 串行锁、会话内核（事件日志 + 游标投递 + decide/evolve 聚合 + 事件版本化 + 崩溃重放）、声明式状态机工具。
 
 - **纯 ESM、零 runtime 依赖**（无第三方包、无服务进程、无全局时钟/随机——一切非确定性走注入）。
-- **对外行为唯一事实**：[`module_docs/contract.md`](module_docs/contract.md)（v1.0.0 正式契约：35 导出符号 · 5 端口 · 15 条不变量承诺，全部与测试互指）。
-- 版本引用：git tag 固定（`v1.0.0` 起）。
+- **对外行为唯一事实**：[`module_docs/contract.md`](module_docs/contract.md)（v1.1.0 正式契约：37 导出符号 · 5 端口 · 15 条不变量承诺，全部与测试互指）。
+- **适配器达标方式**：自带 logStore 持久化实现的消费方，用 `session/logstore-conformance.js` 的 `runLogStoreConformance({ createStore })` 跑通 10 项端口一致性检查即算满足端口义务（v1.1.0 起）。
+- 版本引用：git tag 固定（`v1.0.0` 起；当前 `v1.1.0`）。
 
 ## 三层一图
 

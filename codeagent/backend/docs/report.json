@@ -2,10 +2,10 @@
   "schema_version": 2,
   "module": "realtime_core",
   "role": "backend",
-  "task": "v1.1.0 D1：导出 logStore 端口一致性套件（CFO 裁决只批 D1，D2 presence 不批）",
+  "task": "v1.1.0 D1：导出 logStore 端口一致性套件（第 1 轮返修：同审两人 rejected 的并发 CAS 漏检 + 错误归属 + 版本漂移）",
   "tier": "normal",
   "status": "self_checked",
-  "summary": "新增 code/backend/src/session/logstore-conformance.js（332 行、零 import），导出 runLogStoreConformance({createStore, seeds?, steps?}) 与 LOG_STORE_CONFORMANCE_CHECKS（9 项检查：append 信封与 seq 从 1 连续 / CAS 冲突 / 整批原子 / read 窗口 / 游标前移与幂等 / 禁回退 / 禁越过日志末尾 / 多流隔离 / 固定种子模糊比对），把 contract §端口契约① 的实现方义务从散文升级为可执行规格；消费方（copycat R3 SQLite 适配器、上课服务）跑通即达标。新增 11 个测试：正向 2（内存参考实现整套通过、全异步包装同样通过，证明异步适配器合法）+ 反向 6（不做 CAS / 整批不原子 / 游标可回退 / 游标可越界 / read 忽略 limit / read 返回未冻结信封，每个坏适配器必须被指名抓住）+ 入参守卫 3。关键改判：就绪评估里原计划『既有 property 测试改为一行调用』是错的——会修改既有测试文件、撞兼容门，改为新套件与既有 log-cursors.property.test.mjs 并存（后者考内核+内存实现+delivery 投递层，前者考任意适配器对四方法的义务，scope 不同）。套件首跑抓到的第一个问题是它自己：模糊检查的回退攻击会生成 seq=0，而参考实现对 seq=0 抛 TypeError（入参非法）不是 RangeError（游标违规），已把回退目标限定在 [1, cur-1]。版本 1.1.0（仓根与 code/backend 两处 package.json 同时改，避免新漂移）。既有 201 测试零修改，212/212 全绿，纯度门 66→71。契约草案五段已写进 worklog 第 52 行起的『契约草案』节（含消费方义务 B4/B5/B6），contract.md 未动、由 CFO 执笔。",
+  "summary": "【返修后】新增 code/backend/src/session/logstore-conformance.js（394 行、零 import），导出 runLogStoreConformance + LOG_STORE_CONFORMANCE_CHECKS（返修后 10 项检查）。R1 共同 P1 已修：新增第 10 项 append/cas-concurrent——同一 expectedLastSeq 三路并发 append 必须恰好一个胜者、其余全 ConflictError、日志恰好多出胜者那一批；确定性做法＝三路 append 先全部发出（各自同步执行到第一个 await）再 Promise.allSettled 收割，不用定时器、不赌墙钟：同步适配器后来者调用时即撞 CAS，正确异步适配器提交点只有一个能赢，而 TOCTOU 适配器（读快照→让出→按陈旧快照提交）三路全部“成功”被当场抓住。R2（Codex P1-3 / opencode P2-3）已修：runLogStoreConformance 对 createStore() 与每个 spec.run 各包一层，非 LogStoreConformanceError 一律重包为带 check 的违约、原错误挂 err.cause。R3 行数自报不实已按 wc -l 回填（332→实测 394）。R4 版本漂移已修（两个 package.json description + README v1.0.0→v1.1.0，README 另补适配器达标方式一行）；contract.md 的 frontmatter id 与其余五处属 CFO scope，逐条写进 worklog 第 141 行起的「契约更正」节。其中最重要一条（更正①）：契约「消费方义务」第 4 条与实现相反——实测 delivery.pull 不动游标，同 group 两次 pull 都拿到 [1,2]（重复投递，不是竞争消费）；真正的危险是任一方 ack 会推进全组共享游标，另一方从此看不到 ≤seq 的事件。该错误表述源头是我就绪评估的 B6，如实认领并给出可逐字替换的正确文本。测试 201 既有零修改 + 本单 16 = 217/217 全绿，纯度门 71/71，run-gates 🟢。",
   "git": {
     "protocol": "embedded-self-v2",
     "branch": "feat/v1.1-logstore-conformance",
@@ -17,6 +17,7 @@
       "code/backend/src/session/logstore-conformance.test.mjs",
       "code/backend/package.json",
       "package.json",
+      "README.md",
       "codeagent/backend/docs/worklog/2026-09-18-backend-v1.1-logstore-conformance.md",
       "codeagent/backend/docs/diary/2026-09-18-v1.1-logstore-conformance.jsonl",
       "codeagent/backend/docs/report.json"
@@ -24,7 +25,9 @@
   },
   "contract": {
     "touched": false,
-    "which": ["realtime-core-kernel：v1.1.0 新增 2 个导出符号 + 消费方义务节——contract.md 本单未动，草案在 worklog 第 52 行起的『契约草案』节，由 CFO 执笔合并"],
+    "which": [
+      "realtime-core-kernel：v1.1.0 新增 2 个导出符号 + 消费方义务节——contract.md 本单未动；返修后的六处更正（含一条与实现相反的行为描述）在 worklog 第 141 行起的「契约更正」节，由 CFO 执笔"
+    ],
     "consumes": []
   },
   "cross_module_impact": [
@@ -32,42 +35,117 @@
     "上课服务：其 logStore 适配器同样接本套件；CFO 交接纸条『端口义务有可执行 property 套件』的承诺在 v1.1.0 起成立"
   ],
   "escalation": {
-    "reason": "需 CFO 动作（契约执笔 + 打 tag + 纸条更正）",
-    "detail": "①按 worklog 第 52 行起的契约草案五段更新 module_docs/contract.md（版本行 v1.1.0 + 符号计数 35→37/文件 16→17、新符号表、端口①达标方式一句、新建『消费方义务』节含 B4/B5/B6、变更记录一行）；②合并后在 main squash commit 打 v1.1.0 tag；③CFO 交接纸条 deploy/coordination/handoff-realtime_core-for-lesson-sync.md 的更正（一致性套件承诺、多标签页非免费）——v1.1.0 落地后第一条即成立，可改为『pin v1.1.0 并用 runLogStoreConformance 验收你的适配器』；④D2 presence 按裁决不做，RTC-DEBT-PRESENCE 继续挂账等第二个当堂课页。"
+    "reason": "需 CFO 动作（契约更正执笔）+ 需 reviewagent 更新探针断言方向",
+    "detail": "①按 worklog 第 141 行起「契约更正」六条更新 module_docs/contract.md：更正①消费方义务第 4 条（当前表述与实现相反，实测证据在 worklog，必须整条替换）；②:99 session/ 段头 8 文件·11 符号 → 9 文件·13 符号（各段求和 17/37 与 :27 对齐）；③:160 条目 9 项→10 项检查 + 补错误归一化承诺（含 err.cause）；④:161 当前 9 项→10 项；⑤:235 义务第 1 条把数组 LOG_STORE_CONFORMANCE_CHECKS 从枚举 switch 那句摘出单列；⑥:11 frontmatter id @v1.0.0→@v1.1.0 且 :296 变更记录同步 10 项/217 测试。②两位 reviewer 的探针有若干断言钉的是被修复的缺陷本身（codex :120 与 :195、opencode D1 判定条件），修好后必然反转，需 reviewagent 按修复后期望更新——探针在 review/ 下属他们 scope，我只读未改。③合并后打 v1.1.0 tag。④D2 presence 仍按裁决不做。"
   },
   "tests": {
-    "unit": { "passed": 212, "failed": 0, "cmd": "cd code/backend && node --test --test-concurrency=1（既有 201 零修改 + 新增 11）" },
-    "e2e": { "passed": 0, "failed": 0, "flow": "无 e2e：库模块，无服务进程/对外端点。本单新增面是测试期工具，正向验收由『内存参考实现 + 全异步包装实现整套通过』承担" }
+    "unit": {
+      "passed": 217,
+      "failed": 0,
+      "cmd": "cd code/backend && node --test --test-concurrency=1（既有 201 零修改 + 本单 16）"
+    },
+    "e2e": {
+      "passed": 0,
+      "failed": 0,
+      "flow": "无 e2e：库模块，无服务进程/对外端点。正向验收由『内存参考实现 + 全异步包装实现整套 10 项通过』承担；反向由 8 个坏适配器各被指名抓住承担"
+    }
   },
   "compat_gate": {
     "existing_tests_unmodified": true,
     "existing_pass": 201,
-    "new_pass": 11,
-    "evidence": "git diff --name-only --no-renames 076d5e1..HEAD 中无任何既有 *.test.mjs（只新增 logstore-conformance.test.mjs 一个测试文件）；既有 log-cursors.property.test.mjs 逐字未动"
+    "new_pass": 16,
+    "evidence": "git diff --name-only --no-renames 076d5e1..HEAD 的 *.test.mjs 只有本单新增的 logstore-conformance.test.mjs（A/M 均属本分支自产）；既有 log-cursors.property.test.mjs 等逐字未动"
   },
   "self_check": {
     "reviewcode_passed": true,
-    "attempts": 2,
-    "failed_gates": ["首跑 logstore-conformance.test.mjs：fuzz/model-equivalence 在 seed 1 step 14 生成 seq=0 的回退攻击，期望 RangeError 实得 TypeError——套件自身的语义错（seq=0 属入参非法而非游标违规），已把回退目标限定在 [1, cur-1] 后重跑全绿"],
+    "attempts": 3,
+    "failed_gates": [
+      "第 1 轮自检：fuzz/model-equivalence 在 seed 1 step 14 生成 seq=0 的回退攻击，期望 RangeError 实得 TypeError（套件自身语义错），已把回退目标限定在 [1, cur-1]",
+      "第 1 轮独立审核（codex + opencode 双 rejected）：①套件无并发交错 CAS 检查，串行全对的 TOCTOU 适配器 9/9 通过后并发丢写；②适配器在预期成功的调用中抛的原始错误逃逸（err.check undefined）；③两个 package.json description 与 README 仍写 contract v1.0.0；④自报 332 行实为 334 行。四项本轮全修"
+    ],
     "passed": true,
-    "detail": "跑前 unset http_proxy/https_proxy/HTTP_PROXY/HTTPS_PROXY/ALL_PROXY。node review/reviewcode/check-kernel-purity.mjs = 71 PASS / 0 FAIL（session/ 8→9 文件 ×5 = 45；新文件零 import、零领域词、零 Date.now/Math.random、db.transaction=0、332 行 ≤500）；cd code/backend && node --test --test-concurrency=1 = 212 pass / 0 fail；bash ci/gates/run-gates.sh = 🟢 全部门禁通过"
+    "detail": "跑前 unset 五个代理变量。node review/reviewcode/check-kernel-purity.mjs = 71 PASS / 0 FAIL；cd code/backend && node --test --test-concurrency=1 = 217 pass / 0 fail；bash ci/gates/run-gates.sh = 🟢 全部门禁通过。另跑两位 reviewer 的探针（只读不改）：opencode 牙齿探针 A1–A10/B2 全 ok 且 D1 的 NOTE 行显示 racyCAS 现被 [append/cas-concurrent] 指名抓住（其 exit≠0 来自探针只判坏适配器自身的日志损坏、从不读套件是否抓住——断言方向需 reviewagent 更新）；codex 探针 5 个 named-failure 全 PASS，随后停在 :120 的 assert.equal(rawError.name,'RangeError')——那条断言钉的就是已修复的缺陷本身，必然反转"
   },
   "tech_debt": [
-    { "id": "RTC-DEBT-CONFORMANCE-SUITE", "debt": "logStore 端口一致性套件不可复用（就绪评估 B1）", "severity": "high", "proposal": "✅ 本单清偿：导出 runLogStoreConformance + LOG_STORE_CONFORMANCE_CHECKS，9 项检查各配一个反证测试证明有牙齿", "owner_hint": "已完成，待审核与 tag" },
-    { "id": "RTC-DEBT-CONFORMANCE-OVERLAP", "debt": "新套件与既有 log-cursors.property.test.mjs 在『seq 连续/游标只进』上有模型断言重复", "severity": "low", "proposal": "有意保留：合并两者必须改既有测试文件，撞兼容门（rules.md §技术与目录 4）。两者 scope 不同（既有考内核+内存实现+delivery，新套件考任意适配器的四方法义务）。若将来兼容门随 v2 放开，可让既有 property 测试转为套件的调用方", "owner_hint": "v2 专项" },
-    { "id": "RTC-DEBT-PRESENCE", "debt": "无 presence/心跳 TTL 判定（就绪评估 B2 / D2）", "severity": "medium", "proposal": "CFO 裁决本轮不批，等第二个当堂课页落地再议。继续挂账", "owner_hint": "待 CFO 再议" },
-    { "id": "RTC-DEBT-CONSUMER-OBLIGATION-DOCS", "debt": "契约缺消费方义务节（guard 纯同步谓词 / 命名归消费方 / 多标签页选型）", "severity": "medium", "proposal": "草案已备（worklog 第 52 行起『契约草案』④），由 CFO 执笔合并进 contract.md", "owner_hint": "CFO" },
-    { "id": "RTC-DEBT-VERSION-DOC-DRIFT", "debt": "contract.md 版本行仍写 v1.0.0", "severity": "low", "proposal": "package.json 两处已随本单改 1.1.0；contract.md 版本行按草案① 由 CFO 改", "owner_hint": "CFO" },
-    { "id": "RTC-DEBT-REAL-LOGSTORE", "debt": "库内仍无真实持久化适配器（维持 P3b/P5 决策）", "severity": "low", "proposal": "维持不进内核（better-sqlite3 是原生依赖，会毁掉零依赖卖点）。本单交付的套件正是该决策成立的前提——消费方自写、套件保证不写错", "owner_hint": "各消费方" }
+    {
+      "id": "RTC-DEBT-CONFORMANCE-SUITE",
+      "debt": "logStore 端口一致性套件不可复用（就绪评估 B1）",
+      "severity": "high",
+      "proposal": "✅ 本单清偿：导出 runLogStoreConformance + LOG_STORE_CONFORMANCE_CHECKS，9 项检查各配一个反证测试证明有牙齿",
+      "owner_hint": "已完成，待审核与 tag"
+    },
+    {
+      "id": "RTC-DEBT-CONFORMANCE-OVERLAP",
+      "debt": "新套件与既有 log-cursors.property.test.mjs 在『seq 连续/游标只进』上有模型断言重复",
+      "severity": "low",
+      "proposal": "有意保留：合并两者必须改既有测试文件，撞兼容门（rules.md §技术与目录 4）。两者 scope 不同（既有考内核+内存实现+delivery，新套件考任意适配器的四方法义务）。若将来兼容门随 v2 放开，可让既有 property 测试转为套件的调用方",
+      "owner_hint": "v2 专项"
+    },
+    {
+      "id": "RTC-DEBT-PRESENCE",
+      "debt": "无 presence/心跳 TTL 判定（就绪评估 B2 / D2）",
+      "severity": "medium",
+      "proposal": "CFO 裁决本轮不批，等第二个当堂课页落地再议。继续挂账",
+      "owner_hint": "待 CFO 再议"
+    },
+    {
+      "id": "RTC-DEBT-CONSUMER-OBLIGATION-DOCS",
+      "debt": "契约缺消费方义务节（guard 纯同步谓词 / 命名归消费方 / 多标签页选型）",
+      "severity": "medium",
+      "proposal": "草案已备（worklog 第 52 行起『契约草案』④），由 CFO 执笔合并进 contract.md",
+      "owner_hint": "CFO"
+    },
+    {
+      "id": "RTC-DEBT-VERSION-DOC-DRIFT",
+      "debt": "contract.md 版本行仍写 v1.0.0",
+      "severity": "low",
+      "proposal": "package.json 两处已随本单改 1.1.0；contract.md 版本行按草案① 由 CFO 改",
+      "owner_hint": "CFO"
+    },
+    {
+      "id": "RTC-DEBT-REAL-LOGSTORE",
+      "debt": "库内仍无真实持久化适配器（维持 P3b/P5 决策）",
+      "severity": "low",
+      "proposal": "维持不进内核（better-sqlite3 是原生依赖，会毁掉零依赖卖点）。本单交付的套件正是该决策成立的前提——消费方自写、套件保证不写错",
+      "owner_hint": "各消费方"
+    }
   ],
   "pitfalls_checked": [
-    { "pitfall": "既有测试一行不许改（rules.md 兼容门）", "ok": true, "evidence": "git diff --name-only origin/main..HEAD 无既有 *.test.mjs；201 既有用例零修改全绿" },
-    { "pitfall": "不改 module_docs/contract.md（契约归 arbiter/CFO）", "ok": true, "evidence": "diff 中无 module_docs/；草案写在 worklog 第 52 行起" },
-    { "pitfall": "自 origin/main 建分支、不叠在 readiness 分支上（铁律15②）", "ok": true, "evidence": "git checkout -b feat/v1.1-logstore-conformance origin/main；merge-base = 076d5e1" },
-    { "pitfall": "新增 session/ 文件必须过纯度门 5 项（零 import 逃逸/零领域词/零 Date.now·Math.random/无 db.transaction/≤500 行）", "ok": true, "evidence": "check-kernel-purity 71 PASS，新文件 332 行、零 import" },
-    { "pitfall": "非确定性走注入：模糊检查用固定种子 mulberry32，不读全局时钟/随机", "ok": true, "evidence": "logstore-conformance.js mulberry32；clock/rng 属 createStore 注入职责" },
-    { "pitfall": "不 push（任务单显式）", "ok": true, "evidence": "本地 commit only，远端无该分支" },
-    { "pitfall": "不打印任何密钥值", "ok": true, "evidence": "本模块无 env/密钥表面；本单零密钥接触" }
+    {
+      "pitfall": "既有测试一行不许改（rules.md 兼容门）",
+      "ok": true,
+      "evidence": "git diff --name-only origin/main..HEAD 无既有 *.test.mjs；201 既有用例零修改全绿"
+    },
+    {
+      "pitfall": "不改 module_docs/contract.md（契约归 arbiter/CFO）",
+      "ok": true,
+      "evidence": "diff 中无 module_docs/；草案写在 worklog 第 52 行起"
+    },
+    {
+      "pitfall": "自 origin/main 建分支、不叠在 readiness 分支上（铁律15②）",
+      "ok": true,
+      "evidence": "git checkout -b feat/v1.1-logstore-conformance origin/main；merge-base = 076d5e1"
+    },
+    {
+      "pitfall": "新增 session/ 文件必须过纯度门 5 项（零 import 逃逸/零领域词/零 Date.now·Math.random/无 db.transaction/≤500 行）",
+      "ok": true,
+      "evidence": "check-kernel-purity 71 PASS，新文件 332 行、零 import"
+    },
+    {
+      "pitfall": "非确定性走注入：模糊检查用固定种子 mulberry32，不读全局时钟/随机",
+      "ok": true,
+      "evidence": "logstore-conformance.js mulberry32；clock/rng 属 createStore 注入职责"
+    },
+    {
+      "pitfall": "不 push（任务单显式）",
+      "ok": true,
+      "evidence": "本地 commit only，远端无该分支"
+    },
+    {
+      "pitfall": "不打印任何密钥值",
+      "ok": true,
+      "evidence": "本模块无 env/密钥表面；本单零密钥接触"
+    }
   ],
   "security_reviewed": false,
   "security_note": "realtime_core 无对外端点、无 env/密钥表面。本单新增面是测试期工具，不进生产请求路径；契约草案④第 2 条已把『鉴权必须在 longPoll 之前、不得放进同步 guard』写成消费方义务（呼应铁律 18）"

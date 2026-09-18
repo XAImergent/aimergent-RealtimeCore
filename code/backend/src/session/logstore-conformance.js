@@ -15,8 +15,10 @@
 //   - `createStore()` 每次调用必须给一个**全新空**存储（可返回 Promise）；套件
 //     每项检查各取一个，互不污染。
 //   - 适配器可同步可异步：套件对每个端口调用都 `await`（契约"异步实现合法"）。
-//   - 失败即 throw（`name = 'LogStoreConformanceError'`，message 前缀是检查名），
-//     成功返回 `{checks, passed}`。不依赖任何测试框架——消费方用什么 runner 都行。
+//   - 失败即 throw（`name = 'LogStoreConformanceError'`、`err.check` = 违约检查名、
+//     message 前缀是检查名），成功返回 `{checks, passed}`。适配器自己泄漏的原始
+//     异常也会被重包成同一形状（原错误挂在 `err.cause`），**任一违约都可归因**。
+//     不依赖任何测试框架——消费方用什么 runner 都行。
 //   - 零 import：不引 node:assert、不引第三方，保持全库"零依赖 + 浏览器可跑"一致。
 //   - 非确定性走注入：模糊检查用固定种子 PRNG，跑几次都是同一批用例（clock/rng
 //     属于 createStore 的注入职责，套件不碰全局时钟）。
@@ -41,6 +43,14 @@ function violation (check, message) {
 
 function must (check, condition, message) {
   if (!condition) throw violation(check, message);
+}
+
+/** 把适配器在"预期成功"的调用中泄漏的原始异常重包成可归因的违约（保留 cause）。 */
+function unexpected (check, err, label) {
+  const detail = err && err.name ? `${err.name}: ${err.message}` : String(err);
+  const wrapped = violation(check, `${label}：适配器抛出了未预期的 ${detail}`);
+  wrapped.cause = err;
+  return wrapped;
 }
 
 function json (value) { return JSON.stringify(value) ?? 'undefined'; }
@@ -120,6 +130,44 @@ const CHECKS = [
         'expectedLastSeq 超前于实际 lastSeq 时同样必须冲突');
 
       mustEqual(check, await seqsOf(store, s), [1, 2], '冲突的 append 不得写入任何事件');
+    },
+  },
+
+  {
+    name: 'append/cas-concurrent',
+    async run (store) {
+      const check = 'append/cas-concurrent';
+      const s = 'stream-race';
+      const batches = [[ev('r1')], [ev('r2')], [ev('r3')]];
+
+      // 确定性交错：三路 append **全部先发出**（每路同步执行到自己的第一个
+      // await 为止），再统一收割——不依赖真并发时序、不用定时器。
+      //   · 同步适配器：第一路当场写完，后两路调用时已看到新 lastSeq → 立刻 CAS 冲突。
+      //   · 正确的异步适配器：CAS 判定与提交原子（事务/唯一约束），提交点只有一个能赢。
+      //   · TOCTOU 适配器（先读快照 → 让出 → 按陈旧快照提交）：三路都在提交前
+      //     读到同一快照，于是三路全部"成功"——已确认的写入被静默覆盖，正是本项要抓的。
+      const attempts = batches.map((b) => (async () => store.append(s, 0, b))());
+      const settled = await Promise.allSettled(attempts);
+      const winners = settled.filter((r) => r.status === 'fulfilled');
+      const losers = settled.filter((r) => r.status === 'rejected');
+
+      must(check, winners.length === 1,
+        `同一 expectedLastSeq=0 的 ${batches.length} 路并发 append 必须恰好一个胜者，实得 ${winners.length} 个成功 / ${losers.length} 个被拒`
+        + '——败者没被 CAS 拦下意味着已确认的写入会被静默覆盖（append 必须是原子 compare-and-swap，不是"先读后写"）');
+      for (const l of losers) {
+        const reason = l.reason;
+        must(check, reason && reason.name === 'ConflictError',
+          `落败的并发 append 必须抛 ConflictError，实得 ${reason && reason.name}: ${reason && reason.message}`);
+      }
+
+      const after = await store.read(s, 0);
+      mustEqual(check, after.map((e) => e.seq), [1], '并发之后日志必须恰好多出胜者那一批（不重不丢、seq 无空洞）');
+      must(check, batches.some((b) => b[0].type === after[0].type), '日志里留下的必须是某一路胜者写入的事件');
+      mustEqual(check, winners[0].value && winners[0].value.lastSeq, 1, '胜者返回的 lastSeq 必须与日志实际长度一致');
+
+      await store.append(s, 1, [ev('after-race')]);
+      mustEqual(check, (await store.read(s, 0)).map((e) => e.seq), [1, 2],
+        '竞争之后的续写必须接着真实 lastSeq 连续编号（并发不得弄乱 CAS 状态）');
     },
   },
 
@@ -304,7 +352,7 @@ export const LOG_STORE_CONFORMANCE_CHECKS = Object.freeze(CHECKS.map((c) => c.na
  *   seeds?: number[],                             // 模糊检查的固定种子（默认 [1,2,3]）
  *   steps?: number,                               // 每个种子的步数（默认 60；慢适配器可调小）
  * }} options
- * @returns {Promise<{checks: string[], passed: number}>} 全过返回；任一违约 throw
+ * @returns {Promise<{checks: string[], passed: number}>} 全过返回；任一违约 throw LogStoreConformanceError
  */
 export async function runLogStoreConformance ({ createStore, seeds = [1, 2, 3], steps = 60 } = {}) {
   if (typeof createStore !== 'function') {
@@ -321,12 +369,24 @@ export async function runLogStoreConformance ({ createStore, seeds = [1, 2, 3], 
   for (const spec of CHECKS) {
     const runsWithSeed = spec.name.startsWith('fuzz/') ? seeds : [undefined];
     for (const seed of runsWithSeed) {
-      const store = await createStore();
+      let store;
+      try {
+        store = await createStore();
+      } catch (err) {
+        throw unexpected(spec.name, err, 'createStore() 未能给出一个全新空存储');
+      }
       for (const method of ['append', 'read', 'getCursor', 'advanceCursor']) {
         must(spec.name, store && typeof store[method] === 'function',
           `createStore() 返回的对象缺少端口方法 ${method}()`);
       }
-      await spec.run(store, { seed, steps });
+      // 任一违约都必须可归因：适配器在"预期成功"的调用中泄漏的原始异常
+      // （RangeError/TypeError/自定义错误…）在此重包为带 check 与 cause 的违约。
+      try {
+        await spec.run(store, { seed, steps });
+      } catch (err) {
+        if (err && err.name === 'LogStoreConformanceError') throw err;
+        throw unexpected(spec.name, err, '检查执行中断');
+      }
     }
     ran.push(spec.name);
   }

@@ -7,6 +7,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createMemoryLogStore } from './memory-log-store.js';
+import { sealEnvelopes } from './envelope.js';
+import { ConflictError } from './errors.js';
 import { runLogStoreConformance, LOG_STORE_CONFORMANCE_CHECKS } from './logstore-conformance.js';
 
 function fixedCtx () {
@@ -121,6 +123,126 @@ test('logstore-conformance · 抓住"read 返回未冻结信封"（调用方可�
   }, 'append/envelope-and-seq-from-one');
 });
 
+// ── 并发 CAS（返修新增：串行全对、并发丢写的适配器必须被抓住）──────────
+//
+// 两个坏适配器的共同点：**先读快照 → 让出（await）→ 按陈旧快照提交**。串行调用
+// 时语义完全正确（前 9 项全过），并发同 expectedLastSeq 时多路同时"成功"，已确认
+// 的写入被静默覆盖——正是 contract I7「同一快照 K 路并发恰好一个胜者」要挡的。
+
+/** 变体一：CAS 判定读的是 await 之前的快照，提交时 push 进自己那份陈旧数组。 */
+function toctouCommitStore () {
+  let clock = 0; let n = 0;
+  const rng = () => { n += 1; return (n % 97) / 97; };
+  const logs = new Map(); const cursors = new Map();
+  const logOf = (s) => logs.get(s) ?? [];
+  return {
+    async append (streamId, expectedLastSeq, events) {
+      const log = logOf(streamId);
+      const actual = log.length;                       // 快照
+      if (expectedLastSeq !== actual) throw new ConflictError({ streamId, expected: expectedLastSeq, actual });
+      const sealed = sealEnvelopes({ streamId, lastSeq: actual, events, clock: () => { clock += 1; return clock; }, rng });
+      await Promise.resolve();                         // ← 交错窗口
+      if (!logs.has(streamId)) logs.set(streamId, log);
+      log.push(...sealed);                             // 基于陈旧快照提交
+      return { lastSeq: log.length };
+    },
+    async read (streamId, from, limit) {
+      const log = logOf(streamId);
+      return log.slice(from, limit === undefined ? log.length : from + limit);
+    },
+    async getCursor (streamId, group) { return cursors.get(streamId)?.get(group) ?? 0; },
+    async advanceCursor (streamId, group, seq) {
+      const cur = cursors.get(streamId)?.get(group) ?? 0;
+      if (seq < cur) throw new RangeError('rollback');
+      if (seq === cur) return;
+      if (seq > logOf(streamId).length) throw new RangeError('past end');
+      if (!cursors.has(streamId)) cursors.set(streamId, new Map());
+      cursors.get(streamId).set(group, seq);
+    },
+  };
+}
+
+/** 变体二：await 之后才比对陈旧快照，提交用 concat 覆盖整条日志（后到者吞掉先到者）。 */
+function toctouOverwriteStore () {
+  const inner = toctouCommitStore();
+  const logs = new Map();
+  let clock = 0; let n = 0;
+  const rng = () => { n += 1; return (n % 97) / 97; };
+  const logOf = (s) => logs.get(s) ?? [];
+  return {
+    ...inner,
+    async append (streamId, expectedLastSeq, events) {
+      const log = logOf(streamId);
+      const actual = log.length;
+      const sealed = sealEnvelopes({ streamId, lastSeq: actual, events, clock: () => { clock += 1; return clock; }, rng });
+      await Promise.resolve(); await Promise.resolve();   // ← 交错窗口
+      if (expectedLastSeq !== actual) throw new ConflictError({ streamId, expected: expectedLastSeq, actual });
+      logs.set(streamId, log.concat(sealed));             // 覆盖式提交
+      return { lastSeq: actual + sealed.length };
+    },
+    async read (streamId, from, limit) {
+      const log = logOf(streamId);
+      return log.slice(from, limit === undefined ? log.length : from + limit);
+    },
+    async advanceCursor (streamId, group, seq) {
+      const cur = await inner.getCursor(streamId, group);
+      if (seq < cur) throw new RangeError('rollback');
+      if (seq === cur) return;
+      if (seq > logOf(streamId).length) throw new RangeError('past end');
+      return inner.advanceCursor(streamId, group, seq);
+    },
+  };
+}
+
+test('logstore-conformance · 抓住"CAS 非原子"（串行全对，并发同快照多路都成功 → 丢写）', async () => {
+  const err = await expectCaught(toctouCommitStore, 'append/cas-concurrent');
+  assert.match(err.message, /恰好一个胜者/);
+});
+
+test('logstore-conformance · 抓住"CAS 非原子·覆盖式提交"（后到者吞掉先到者的已确认写入）', async () => {
+  await expectCaught(toctouOverwriteStore, 'append/cas-concurrent');
+});
+
+test('logstore-conformance · 并发检查是确定性的：同一坏适配器连跑两次违约项相同', async () => {
+  const a = await expectCaught(toctouCommitStore, 'append/cas-concurrent');
+  const b = await expectCaught(toctouCommitStore, 'append/cas-concurrent');
+  assert.equal(a.check, b.check);
+  assert.equal(a.message, b.message, '不依赖时序：两次跑出的违约信息必须逐字相同');
+});
+
+// ── 错误归属：适配器泄漏的原始异常必须被重包成可归因的违约 ────────────────
+
+test('logstore-conformance · 适配器在预期成功的调用中抛错 → 重包为 LogStoreConformanceError 并保留 cause', async () => {
+  const err = await runLogStoreConformance({
+    createStore: () => {
+      const inner = mem();
+      return {
+        ...inner,
+        advanceCursor (streamId, group, seq) {
+          if (seq === inner.getCursor(streamId, group)) throw new RangeError('not idempotent'); // 重确认不幂等
+          return inner.advanceCursor(streamId, group, seq);
+        },
+      };
+    },
+    seeds: [1],
+    steps: 20,
+  }).then(() => null, (e) => e);
+
+  assert.ok(err, '不幂等的 advanceCursor 必须被抓住');
+  assert.equal(err.name, 'LogStoreConformanceError', '原始 RangeError 不得逃逸');
+  assert.equal(err.check, 'cursor/advance-and-idempotent', '必须指名违约检查项');
+  assert.match(err.message, /^\[cursor\/advance-and-idempotent\]/);
+  assert.equal(err.cause && err.cause.name, 'RangeError', '原始异常必须挂在 cause 上');
+});
+
+test('logstore-conformance · createStore() 抛错也被指名（不泄漏原始异常）', async () => {
+  const err = await runLogStoreConformance({ createStore: () => { throw new Error('db down'); } })
+    .then(() => null, (e) => e);
+  assert.equal(err.name, 'LogStoreConformanceError');
+  assert.equal(err.check, LOG_STORE_CONFORMANCE_CHECKS[0]);
+  assert.equal(err.cause && err.cause.message, 'db down');
+});
+
 // ── 套件自身的入参守卫 ────────────────────────────────────────────────
 
 test('logstore-conformance · 缺端口方法的对象被指名抓住', async () => {
@@ -138,7 +260,8 @@ test('logstore-conformance · 非法入参响亮 TypeError（createStore / seeds
 
 test('logstore-conformance · 检查名清单冻结且覆盖四个端口方法', () => {
   assert.ok(Object.isFrozen(LOG_STORE_CONFORMANCE_CHECKS));
-  assert.equal(LOG_STORE_CONFORMANCE_CHECKS.length, 9);
+  assert.equal(LOG_STORE_CONFORMANCE_CHECKS.length, 10);
+  assert.ok(LOG_STORE_CONFORMANCE_CHECKS.includes('append/cas-concurrent'), '并发 CAS 检查必须在清单里');
   for (const prefix of ['append/', 'read/', 'cursor/', 'stream/', 'fuzz/']) {
     assert.ok(LOG_STORE_CONFORMANCE_CHECKS.some((n) => n.startsWith(prefix)), `缺少 ${prefix} 段检查`);
   }
