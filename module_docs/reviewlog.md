@@ -15,3 +15,4 @@
 | 2026-08-12 | ci-node22-review | approved | review/reviewreport/2026-08-12-ci-node22-review.md | exact `1d45fee..88a08d3`；workflow 独占 +1/-1，Node 20→22，L0 Git blob、trailer、engines 与 gates 均通过。 |
 
 | 2026-08-23 | gitleaks-license-env（`9061648118fb3f94b27226970b2c119d434a059d..47c1bc75fa7295cf3d0e454bf3f84fc361dbea07`） | **approved** | review/reviewreport/2026-08-23-gitleaks-license-env.md | 新写 review/reviewcode/ci/check_gitleaks_license.sh 机械核验5条：diff恰好1文件、GITLEAKS_LICENSE落在gitleaks-action step的env块内(非裸grep,按缩进解析)、右值为secrets引用且全diff无明文、原有GITHUB_TOKEN/GITLEAKS_CONFIG未受影响、YAML合法(pyyaml)；run-gates.sh本地全绿。 |
+| 2026-09-18 | v1.1-logstore-conformance | rejected→approved | `review/reviewreport/2026-09-18-reviewagent-v1.1-logstore-conformance-codex.md`、`…-opencode.md` | 同审两轮（Codex sol + opencode）：exact `076d5e1..f47c5c9`；首轮共同 P1 并发 CAS 漏检 + 契约第 4 条反了；返修后 217/217、纯度门 71/71、10 项检查 |
