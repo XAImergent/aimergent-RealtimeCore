@@ -1,0 +1,3 @@
+{"ts":"2026-09-18T09:03:50Z","task_id":"v1.1-logstore-conformance","event":"task_start","by":"backend","tier":"normal","branch":"feat/v1.1-logstore-conformance","base":"076d5e13d8110d2339d6a9b64db863b1f9f97bb6","scope":"D1 only (CFO 裁决 D2 presence 不批)"}
+{"ts":"2026-09-18T09:03:50Z","task_id":"v1.1-logstore-conformance","event":"self_check_fail","by":"backend","attempt":1,"gate":"node --test src/session/logstore-conformance.test.mjs","detail":"fuzz seed1 step14 seq=0 回退攻击期望 RangeError 实得 TypeError"}
+{"ts":"2026-09-18T09:03:50Z","task_id":"v1.1-logstore-conformance","event":"self_checked","by":"backend","attempt":2,"purity":"71/71","tests":"212/212","existing_unmodified":201,"new_tests":11,"checks_exported":9,"gates":"green","version":"1.1.0","semver":"minor"}
