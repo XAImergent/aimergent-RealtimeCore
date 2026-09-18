@@ -8,7 +8,7 @@
 
 ```yaml
 provides:
-  - id: realtime-core-kernel@v1.0.0
+  - id: realtime-core-kernel@v1.1.0
     summary: 领域无关的实时/状态机内核——long-poll 生命周期 reducer + 命令分发 + 频道广播 + keyed 锁 + 会话内核（事件日志/游标投递/decide-evolve 聚合/事件版本化/崩溃重放）+ 声明式状态机工具；零 runtime 依赖。
 consumes: []   # 零依赖是卖点：内核不依赖任何平台契约或第三方包
 ```
@@ -96,7 +96,7 @@ wakeup/interval 两形态状态图与逐相转移语义见源文件头注释（�
 | `genEventId(ctx)` | → `'evt-<clock>-<rand36>'`。`ctx={clock:()=>ms, rng:()=>[0,1)}` 注入，零全局读取。**是全库缺省事件 id 格式的唯一事实源**（P5 起 `sealEnvelopes` 复用它） |
 | `genTurnId(ctx)` | → `'q-<clock>-<rand36>'`。两段式操作稳定 id（copycat 预备用途）。〔遗产兼容面〕 |
 
-### session/ —— 会话内核：日志+游标投递（P3a）与 decide/evolve 聚合（P3b）（8 文件 · 11 符号）
+### session/ —— 会话内核：日志+游标投递（P3a）与 decide/evolve 聚合（P3b）（9 文件 · 13 符号）
 
 #### 事件信封（框架字段，库只认这些）
 
@@ -157,8 +157,8 @@ wakeup/interval 两形态状态图与逐相转移语义见源文件头注释（�
 
 | 符号 | 签名与承诺 |
 |---|---|
-| `runLogStoreConformance({createStore, seeds?, steps?})` | → `Promise<{checks: string[], passed: number}>`。对一个 logStore 适配器跑完整的端口义务套件（9 项检查，覆盖 append CAS / 整批原子 / seq 连续从 1 / read 窗口 / 游标只进与幂等 / 越界 RangeError / 多流隔离 / 固定种子模糊比对）。**`createStore()` 每次调用必须返回全新空存储**（可返回 Promise），套件每项检查各取一个；对每个端口调用都 `await`，**异步适配器合法**。任一违约 → throw，`err.name = 'LogStoreConformanceError'`、`err.check` = 违约检查名、message 前缀 `[检查名]`；全过即返回。`seeds`（缺省 `[1,2,3]`）与 `steps`（缺省 `60`）供慢适配器调小；`createStore` 非函数 / `seeds` 非非空整数数组 / `steps` 非正整数 → TypeError。零 import（不依赖测试框架，任意 runner 可用） |
-| `LOG_STORE_CONFORMANCE_CHECKS` | 冻结的检查名数组（稳定顺序，当前 9 项）。**枚举扩展**：后续版本新增检查项 = minor，消费方不得假设长度或下标固定 |
+| `runLogStoreConformance({createStore, seeds?, steps?})` | → `Promise<{checks: string[], passed: number}>`。对一个 logStore 适配器跑完整的端口义务套件（10 项检查，覆盖 append CAS / 并发 CAS（同一 `expectedLastSeq` 多路并发恰好一个胜者）/ 整批原子 / seq 连续从 1 / read 窗口 / 游标只进与幂等 / 越界 RangeError / 多流隔离 / 固定种子模糊比对）。**`createStore()` 每次调用必须返回全新空存储**（可返回 Promise），套件每项检查各取一个；对每个端口调用都 `await`，**异步适配器合法**。任一违约 → throw，`err.name = 'LogStoreConformanceError'`、`err.check` = 违约检查名、message 前缀 `[检查名]`；**适配器在预期成功的调用中泄漏的原始异常同样被重包成该形状，原错误挂在 `err.cause`**（不吞、可追）；全过即返回。`seeds`（缺省 `[1,2,3]`）与 `steps`（缺省 `60`）供慢适配器调小；`createStore` 非函数 / `seeds` 非非空整数数组 / `steps` 非正整数 → TypeError。零 import（不依赖测试框架，任意 runner 可用） |
+| `LOG_STORE_CONFORMANCE_CHECKS` | 冻结的检查名数组（稳定顺序，当前 10 项）。**枚举扩展**：后续版本新增检查项 = minor，消费方不得假设长度或下标固定 |
 
 **定位**：本套件是端口契约"实现方义务"的**可执行规格**——适配器作者跑通它即算达标，不必自行重写 CAS/游标断言。它**不替代**消费方对自己领域逻辑的测试，也不检验性能与事务隔离级别。
 
@@ -232,10 +232,10 @@ send(payload: string) → void        isOpen() → boolean
 
 ## 消费方义务（违反即行为未定义，库不兜底）
 
-1. **枚举留 default 分支**：对 `PollPhase`/`PollEventType`/`PollActionType`/`LOG_STORE_CONFORMANCE_CHECKS` 等做穷尽 switch 必须留 default——枚举扩展是 minor。
+1. **枚举留 default 分支**：对 `PollPhase`/`PollEventType`/`PollActionType` 等**枚举**做穷尽 switch 必须留 default——枚举扩展是 minor。`LOG_STORE_CONFORMANCE_CHECKS` 是**数组**（不是枚举）：遍历它、不得假设长度或下标固定。
 2. **鉴权不得放进 `defineMachine` 的 guard**：guard 契约是 `(ctx, event) => boolean` **纯同步谓词**，返回 Promise 会被当作恒真值，鉴权形同虚设并破坏 I14（`can === true ⟺ transition 成功`）。正确形状：**身份校验在进入 `longPoll`/`delivery.subscribe` 之前一次性完成**（authorizeOnce），校验结果经聚合 `ctx.actor` 透传（库不解释、只透传）；guard 只读**已在 ctx 里的同步事实**。库内零鉴权表面——公网端点的平台鉴权与限流是消费方义务（本项目铁律 18）。
 3. **`streamId` / `scopeKey` / `group` 的命名归消费方**：库把它们当**不透明字符串**，不解析、不校验、不赋予层级语义（`org:…/class:…` 之类的分层约定是消费方的事）。多租户隔离靠命名与消费方存储实现，**库不提供租户边界**。
-4. **同一 `group` 共享一枚游标**：同 group 的多个订阅者（例如同一用户的多个浏览器标签页）**竞争**同一批事件——谁先 `pull` 谁拿走，另一个看不到。需要"各自看全量"就**每个订阅者一个独立 group**（游标行随之增长，回收归消费方，端口不提供删除游标的方法）；需要"只保留最后一个连接"就用 `createPollRegistry()` + `longPoll` 的 `registry`/`key` 顶替（旧连接收 `superseded`）。两者都合法，但**必须显式选一个**——默认行为不是"两个标签页都收到"。
+4. **同一 `group` 共享一枚游标——重复投递，不是竞争消费**：`pull` 不动游标，所以同 group 的多个订阅者（同一用户的多个标签页、多个 worker 实例）**各自都会收到同一批未确认事件**（at-least-once 的自然结果，消费逻辑必须幂等）。真正的危险在 **`ack`**：任一订阅者的前缀确认会把**全组共享**的游标前移，其他订阅者从此再也见不到 `≤seq` 的事件——**哪怕它们还没处理**。三条出路按页面性质选：①同 group 但只让一个"权威"实例 `ack`，其余只读（最省）；②每个订阅者一个独立 group，各自游标互不干扰（游标记录随订阅者增长，回收归消费方——端口不提供删除游标的方法）；③用 `createPollRegistry()` + `longPoll` 的 `registry`/`key` 顶替，只保留最后一个连接（旧连接收 `superseded`）。**必须显式选一个**——默认行为是"都收到、但谁 ack 谁就替全组前移游标"。
 5. **不得修改已发布的 `payload`**：信封冻结但 `payload` 是引用不是拷贝。
 6. **`pull` 不动游标**：at-least-once，未 `ack` 必重投，消费侧逻辑需幂等。
 
@@ -293,4 +293,4 @@ send(payload: string) → void        isOpen() → boolean
 | 2026-07-19 | 无（dev 孵化，无 CR） | P3b 会话内核（下）：`defineAggregate`/`reject`/`isReject`、`upcastEvent`、`createMemorySnapshotStore`、`createAggregateRuntime`（append 路径唯一：复用 delivery.publish）。既有 110 测试零修改全绿，四不变量 property 钉死 |
 | 2026-07-19 | 无（dev 孵化，无 CR） | P4 defineMachine 声明式转移表：平表 + 纯谓词守卫 + 定义期全面校验。既有 153 测试零修改全绿，两不变量 property 钉死，纯度门 56→61 |
 | 2026-07-19 | 无（dev 孵化，无 CR） | **P5 契约正式化（本版）**：draft 全部转正 → v1.0.0 冻结基线（35 导出符号 · 5 端口 · 15 条不变量承诺表与测试互指）；semver 政策 + 信封"只加不改" + 升级链规则单列；遗产兼容面（queue/ + session·skill lock keys）标注冻结、中性化移交 v2/迁平台层；SSE 参考适配器实测三形态共用内核（`reference/sse-adapter.ref.mjs`）；收债：信封 id 去重到 `queue/ids.js`（纯度门白名单闭环 61→66）、`ordering.js` 补 8 专属测试；`longPoll` 微任务窗口（timeout 兜底）如实入契。既有 187 测试零修改全绿（201/201 总）。tag `v1.0.0` 待 CFO 于 main 打；迁平台层待 CFO 治理流程 |
-| 2026-09-18 | CFO 裁决（就绪评估 PR #6 · D1） | **v1.1.0（minor · 纯新增）**：导出 logStore 端口一致性套件 `runLogStoreConformance` / `LOG_STORE_CONFORMANCE_CHECKS`（9 项检查，含固定种子模糊比对），端口"实现方义务"从散文升级为可执行规格，消费方适配器跑通即达标；新增"消费方义务"节（枚举 default / 鉴权不进 guard / 命名归消费方 / 多标签页选型 / payload 引用 / at-least-once）。既有 35 符号 · 5 端口 · 15 不变量逐字未动，既有 201 测试零修改全绿（212/212），纯度门 66→71。opus（backend@realtime_core）实现，项目 arbiter 执笔 |
+| 2026-09-18 | CFO 裁决（就绪评估 PR #6 · D1） | **v1.1.0（minor · 纯新增）**：导出 logStore 端口一致性套件 `runLogStoreConformance` / `LOG_STORE_CONFORMANCE_CHECKS`（10 项检查，含并发 CAS 与固定种子模糊比对；违约与泄漏异常统一为 `LogStoreConformanceError`+`err.cause`），端口"实现方义务"从散文升级为可执行规格，消费方适配器跑通即达标；新增"消费方义务"节（枚举 default / 鉴权不进 guard / 命名归消费方 / 多标签页选型 / payload 引用 / at-least-once）。既有 35 符号 · 5 端口 · 15 不变量逐字未动，既有 201 测试零修改全绿（217/217），纯度门 66→71。同审 Codex sol + opencode 各 rejected 一轮（并发 CAS 漏检、本表第 4 条原表述与实现相反、错误未包装）→ 返修 de755c5。opus（backend@realtime_core）实现，项目 arbiter 执笔 |
